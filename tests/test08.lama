@@ -1,0 +1,8 @@
+var x, m, n;
+
+fun first (a, b, c) {
+  a
+}
+
+
+write(first(1, 2, 3))

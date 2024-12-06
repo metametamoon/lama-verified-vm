@@ -1,0 +1,8 @@
+var x, m, n;
+
+fun second (a, b, c) {
+  b
+}
+
+
+write(second(1, 2, 3))

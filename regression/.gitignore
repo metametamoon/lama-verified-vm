@@ -1,0 +1,7 @@
+*.html
+*.sm
+/*.log
+*.i
+*.s
+*.dis
+*.bc
