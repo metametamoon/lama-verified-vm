@@ -24,7 +24,6 @@ public:
   DiagnosticVisitor(bytefile const *bf) : bf(bf) {}
   bytefile const *bf;
   DiagnosticInformation visit_binop(u8 *decode_next_ip, u8 index) {
-    // auto error = index;
     std::optional<std::string> error = std::nullopt;
     if (index >= (u8)BinopLabel::BINOP_LAST) {
       error = "Unsupported binop kind";

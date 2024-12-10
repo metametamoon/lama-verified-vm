@@ -426,7 +426,6 @@ static inline InstructionResult run_instruction(u8 *ip, bytefile const *bf,
   return InstructionResult{ip, true, nullptr, decoded, false};
 }
 
-
 void gather_incoming_cf(bytefile const *bf, std::unordered_set<u8 *> &result) {
   std::vector<u8 *> instruction_stack;
   for (i32 i = 0; i < bf->public_symbols_number; i++) {
@@ -460,22 +459,22 @@ void gather_incoming_cf(bytefile const *bf, std::unordered_set<u8 *> &result) {
 
 struct DepthTracker {
   u8 *ip;
+  u8 *function_begin;
   i32 current_depth = 0;
   i32 max_depth = 0;
 };
 
 template <bool Check = true>
-void check_depth(bytefile *bf,
-                 std::unordered_set<u8 *> const &incoming_cf) {
+void check_depth(bytefile *bf, std::unordered_set<u8 *> const &incoming_cf) {
   std::vector<DepthTracker> instruction_stack;
   for (i32 i = 0; i < bf->public_symbols_number; i++) {
     u8 *public_symbol_entry_ip = bf->code_ptr + get_public_offset(bf, i);
-    instruction_stack.push_back(DepthTracker{public_symbol_entry_ip});
+    instruction_stack.push_back(
+        DepthTracker{public_symbol_entry_ip, public_symbol_entry_ip});
   }
 
   std::unordered_map<u8 *, i32> registered_depth;
   auto register_depth = [&registered_depth, &bf](u8 *ip, i32 depth) {
-    // printf("registered depth %d before execution of 0x%.5x\n", depth, ip - bf->code_ptr);
     if (registered_depth.count(ip) > 0) {
       auto prev_depth = registered_depth[ip];
       if (prev_depth != depth) {
@@ -488,11 +487,10 @@ void check_depth(bytefile *bf,
 
   auto depth_visitor = DiagnosticVisitor{bf};
   std::unordered_set<u8 *> visited; // for backward reaches
-  std::unordered_map<u8*, i32> max_stack;
+  std::unordered_map<u8 *, i32> max_stack;
   while (!instruction_stack.empty()) {
     auto next = instruction_stack.back();
     auto inst = run_instruction(next.ip, bf, false);
-    // printf("%0x: %s depth=%d\n", next.ip - bf->code_ptr, inst.decoded.c_str(), next.current_depth);
     instruction_stack.pop_back();
     auto const [decode_next_ip, depth_info] =
         visit_instruction<DiagnosticInformation, Check>(bf, next.ip,
@@ -510,10 +508,11 @@ void check_depth(bytefile *bf,
       auto jump_ip = bf->code_ptr + depth_info.jump_address.value();
       if (visited.count(jump_ip) == 0) {
         visited.insert(jump_ip);
-        instruction_stack.push_back(DepthTracker{jump_ip, 0, 0});
+        instruction_stack.push_back(DepthTracker{jump_ip, jump_ip, 0, 0});
       }
-      instruction_stack.push_back(DepthTracker{
-          decode_next_ip, new_depth, std::max(next.max_depth, new_depth)});
+      instruction_stack.push_back(
+          DepthTracker{decode_next_ip, next.function_begin, new_depth,
+                       std::max(next.max_depth, new_depth)});
       break;
     }
     case InstructionKind::JMP: {
@@ -521,7 +520,8 @@ void check_depth(bytefile *bf,
       if (visited.count(jump_ip) == 0) {
         visited.insert(jump_ip);
         instruction_stack.push_back(
-            DepthTracker{jump_ip, new_depth, next.max_depth});
+            DepthTracker{jump_ip, next.function_begin, new_depth,
+                         std::max(next.max_depth, new_depth)});
       }
       register_depth(jump_ip, new_depth);
       break;
@@ -531,20 +531,25 @@ void check_depth(bytefile *bf,
       if (visited.count(jump_ip) == 0) {
         visited.insert(jump_ip);
         instruction_stack.push_back(
-            DepthTracker{jump_ip, new_depth, next.max_depth});
+            DepthTracker{jump_ip, next.function_begin, new_depth,
+                         std::max(next.max_depth, new_depth)});
       }
       register_depth(jump_ip, new_depth);
 
       instruction_stack.push_back(
-          DepthTracker{decode_next_ip, new_depth, next.max_depth});
+          DepthTracker{decode_next_ip, next.function_begin, new_depth,
+                       std::max(next.max_depth, new_depth)});
       break;
     }
     case InstructionKind::END: {
+      max_stack[next.function_begin] =
+          std::max(max_stack[next.function_begin], next.max_depth);
       break;
     }
     case InstructionKind::OTHER: {
-      instruction_stack.push_back(DepthTracker{
-          decode_next_ip, new_depth, std::max(next.max_depth, new_depth)});
+      instruction_stack.push_back(
+          DepthTracker{decode_next_ip, next.function_begin, new_depth,
+                       std::max(next.max_depth, new_depth)});
       break;
     }
     case InstructionKind::FAIL_KIND: {
@@ -552,9 +557,9 @@ void check_depth(bytefile *bf,
     }
     }
   }
-  // for (auto [instr_begin, stacksize]: max_stack) {
-    // *(int *)(instr_begin + 1) = *(int *)(instr_begin + 1) + (stacksize << 16);
-  // }
+  for (auto [instr_begin, stacksize] : max_stack) {
+    *(int *)(instr_begin + 1) = *(int *)(instr_begin + 1) + (stacksize << 16);
+  }
 }
 
 template <bool Checks> static inline void myInterpret(bytefile const *bf) {
@@ -572,49 +577,54 @@ template <bool Checks> static inline void myInterpret(bytefile const *bf) {
   }
 }
 
-void compare_performance(bytefile *bf) {
+void run_with_runtime_checks(bytefile *bf, bool print_perf = false) {
   using std::chrono::duration;
   using std::chrono::duration_cast;
   using std::chrono::high_resolution_clock;
   using std::chrono::milliseconds;
-  {
-    auto before = high_resolution_clock::now();
-    std::unordered_set<u8 *> bytecodes_with_incoming_cf;
-    gather_incoming_cf(bf, bytecodes_with_incoming_cf);
-    check_depth(bf, bytecodes_with_incoming_cf);
-    auto after = high_resolution_clock::now();
-    auto check_duration = duration_cast<milliseconds>(after - before);
+  auto before = high_resolution_clock::now();
+  myInterpret<true>(bf);
+  auto after = high_resolution_clock::now();
+  if (print_perf) {
+    auto exec_duration = duration_cast<milliseconds>(after - before);
+    fprintf(stderr, "execution with checks took %fs\n",
+            exec_duration.count() * 1.0 / 1000);
+  }
+}
 
-    fprintf(stderr, "depth check took %lldms\n", check_duration.count());
-  }
-  {
-    auto before = high_resolution_clock::now();
-    myInterpret<true>(bf);
-    auto after = high_resolution_clock::now();
-    auto interpreter_duration = duration_cast<milliseconds>(after - before);
-    fprintf(stderr, "interpretation with checks took %lldms\n",
-            interpreter_duration.count());
-  }
-  {
-    auto before = high_resolution_clock::now();
-    myInterpret<false>(bf);
-    auto after = high_resolution_clock::now();
-    auto interpreter_duration = duration_cast<milliseconds>(after - before);
-    fprintf(stderr, "interpretation without checks took %lldms\n",
-            interpreter_duration.count());
-  }
+void run_with_verifier_checks(bytefile *bf, bool print_perf = false) {
+  using std::chrono::duration;
+  using std::chrono::duration_cast;
+  using std::chrono::high_resolution_clock;
+  using std::chrono::milliseconds;
+
+  auto before = high_resolution_clock::now();
+  std::unordered_set<u8 *> bytecodes_with_incoming_cf;
+  gather_incoming_cf(bf, bytecodes_with_incoming_cf);
+  check_depth(bf, bytecodes_with_incoming_cf);
+  auto after_verification = high_resolution_clock::now();
+  myInterpret<false>(bf);
+  auto after_execution = high_resolution_clock::now();
+  auto check_duration =
+      duration_cast<milliseconds>(after_verification - before);
+  auto exec_duration =
+      duration_cast<milliseconds>(after_execution - after_verification);
+
+  fprintf(stderr, "verification took %fs\n", check_duration.count() * 1.0 / 1000);
+  fprintf(stderr, "execution without checks took %fs\n",
+          exec_duration.count() * 1.0 / 1000);
 }
 
 int main(int argc, char *argv[]) {
   bytefile *bf = read_file(argv[1]);
-  {
-    std::unordered_set<u8 *> bytecodes_with_incoming_cf;
-    gather_incoming_cf(bf, bytecodes_with_incoming_cf);
-    check_depth(bf, bytecodes_with_incoming_cf);
+  if (argc >= 3) {
+    if (std::string{argv[2]} == "verify") {
+      run_with_verifier_checks(bf, true);
+    } else if (std::string{argv[2]} == "runtime") {
+      run_with_runtime_checks(bf, true);
+    }
+  } else {
+    run_with_runtime_checks(bf);
   }
-  {
-    myInterpret<true>(bf);
-  }
-  // compare_performance(bf);
   return 0;
 }

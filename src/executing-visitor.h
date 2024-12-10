@@ -3,8 +3,6 @@
 #include "visitor.h"
 #include <cstddef>
 #include <cstdio>
-#include <optional>
-#include <string>
 
 // #define DEBUG
 
@@ -37,7 +35,6 @@ static inline u32 patts_match(void *arg, Patt label) {
   }
 }
 
-template <bool Checked>
 static inline i32 arithm_op(i32 l, i32 r, BinopLabel label) {
 #define BINOP_CASE(enum_kind, binop)                                           \
   case enum_kind:                                                              \
@@ -57,12 +54,8 @@ static inline i32 arithm_op(i32 l, i32 r, BinopLabel label) {
     BINOP_CASE(BinopLabel::AND, &&)
     BINOP_CASE(BinopLabel::OR, ||)
   default:
-    if constexpr (Checked) {
-      error("unsupported op label: %d", (i32)label);
-      return -1;
-    } else {
-      __builtin_unreachable();
-    }
+    error("unsupported op label: %d", (i32)label);
+    return -1;
   }
 }
 
@@ -82,8 +75,7 @@ public:
     case GLOBAL: {
       if constexpr (BytecodeChecks) {
         if (index > N_GLOBAL) {
-          fprintf(stderr, "querying out of bounds global");
-          exit(-1);
+          error("querying out of bounds global");
         }
       }
       return (u32)(operands_stack.stack_begin + 1 + index);
@@ -103,12 +95,8 @@ public:
       return (u32)&closure[1 + index];
     }
     default: {
-      if constexpr (BytecodeChecks) {
-        error("unsupported reference kind");
-        return 0;
-      } else {
-        __builtin_unreachable();
-      }
+      error("unsupported reference kind");
+      return 0;
     }
     }
   }
@@ -122,7 +110,7 @@ public:
     u32 t2 = UNBOX(operands_stack.pop());
     u32 t1 = UNBOX(operands_stack.pop());
     u32 result =
-        (u32)arithm_op<BytecodeChecks>((i32)t1, (i32)t2, (BinopLabel)index);
+        (u32)arithm_op((i32)t1, (i32)t2, (BinopLabel)index);
     operands_stack.push(BOX(result));
     return ExecResult{next_ip};
   };
@@ -267,13 +255,8 @@ public:
   };
   inline ExecResult visit_begin(u8 *decode_next_ip, u8 is_closure_begin,
                                 i32 n_args, i32 n_locals) override {
-    // fprintf(stderr, "n_args=%x\n", n_args);
     i32 real_args = n_args & 0xFFFF;
-    // fprintf(stderr, "real_Args=%x\n", real_args);
-
     i32 required_stack = (i32)((((u32)n_args) & 0xFFFF0000) >> 16);
-    // fprintf(stderr, "req_stack=%x\n", required_stack);
-
     if (!operands_stack.has_at_least(real_args + n_locals + 4 +
                                     required_stack)) {
       error("stack overflow");
