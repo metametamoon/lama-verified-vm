@@ -28,4 +28,4 @@ fun generate (n) {
   if n then n : generate (n-1) else {} fi
 }
 
-bubbleSort (generate (2000))
+bubbleSort (generate (1200))

@@ -26,7 +26,7 @@ $(REGRESSION): %: %.lama $(EXECUTABLE)
 	@echo $@
 	$(LAMAC) $@.lama -b
 	mv $(notdir $@).bc regression/$(notdir $@).bc
-	# byterun $@.bc > $@.dis
+	byterun $@.bc > $@.dis
 	cat $@.input | $(EXECUTABLE) $@.bc  > $@.log && diff $@.log regression/orig/$(notdir $@).log --strip-trailing-cr
 
 test: $(TESTS)

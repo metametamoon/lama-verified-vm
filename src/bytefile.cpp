@@ -7,7 +7,7 @@
 
 
 /* Reads a binary bytecode file by name and unpacks it */
-bytefile const *read_file(char *fname) {
+bytefile *read_file(char *fname) {
   FILE *f = fopen(fname, "rb");
   size_t size;
   bytefile *file;

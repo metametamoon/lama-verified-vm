@@ -426,6 +426,7 @@ static inline InstructionResult run_instruction(u8 *ip, bytefile const *bf,
   return InstructionResult{ip, true, nullptr, decoded, false};
 }
 
+
 void gather_incoming_cf(bytefile const *bf, std::unordered_set<u8 *> &result) {
   std::vector<u8 *> instruction_stack;
   for (i32 i = 0; i < bf->public_symbols_number; i++) {
@@ -463,31 +464,39 @@ struct DepthTracker {
   i32 max_depth = 0;
 };
 
-void check_depth(bytefile const *bf,
+template <bool Check = true>
+void check_depth(bytefile *bf,
                  std::unordered_set<u8 *> const &incoming_cf) {
   std::vector<DepthTracker> instruction_stack;
   for (i32 i = 0; i < bf->public_symbols_number; i++) {
     u8 *public_symbol_entry_ip = bf->code_ptr + get_public_offset(bf, i);
     instruction_stack.push_back(DepthTracker{public_symbol_entry_ip});
   }
-  std::unordered_map<u8 *, i32> registered_depth;
 
+  std::unordered_map<u8 *, i32> registered_depth;
   auto register_depth = [&registered_depth, &bf](u8 *ip, i32 depth) {
+    // printf("registered depth %d before execution of 0x%.5x\n", depth, ip - bf->code_ptr);
     if (registered_depth.count(ip) > 0) {
       auto prev_depth = registered_depth[ip];
       if (prev_depth != depth) {
         error("stack depth mismatch at %x", ip - bf->code_ptr);
       }
+    } else {
+      registered_depth[ip] = depth;
     }
   };
 
-  auto depth_visitor = DepthVisitor{};
+  auto depth_visitor = DiagnosticVisitor{bf};
   std::unordered_set<u8 *> visited; // for backward reaches
+  std::unordered_map<u8*, i32> max_stack;
   while (!instruction_stack.empty()) {
     auto next = instruction_stack.back();
+    auto inst = run_instruction(next.ip, bf, false);
+    // printf("%0x: %s depth=%d\n", next.ip - bf->code_ptr, inst.decoded.c_str(), next.current_depth);
     instruction_stack.pop_back();
     auto const [decode_next_ip, depth_info] =
-        visit_instruction(bf, next.ip, depth_visitor);
+        visit_instruction<DiagnosticInformation, Check>(bf, next.ip,
+                                                        depth_visitor);
     auto new_depth = next.current_depth + depth_info.depth_change;
     if (new_depth < 0) {
       error("error: negative depth stack on the abstract executing at:\n%x",
@@ -538,16 +547,22 @@ void check_depth(bytefile const *bf,
           decode_next_ip, new_depth, std::max(next.max_depth, new_depth)});
       break;
     }
+    case InstructionKind::FAIL_KIND: {
+      break; // abort the execution here
+    }
     }
   }
+  // for (auto [instr_begin, stacksize]: max_stack) {
+    // *(int *)(instr_begin + 1) = *(int *)(instr_begin + 1) + (stacksize << 16);
+  // }
 }
 
 template <bool Checks> static inline void myInterpret(bytefile const *bf) {
-  fprintf(stderr, "my interpret here:\n");
   auto interpeter = CheckingExecutingVisitor<Checks>{bf};
   auto ip = bf->code_ptr;
   while (true) {
-    auto result = visit_instruction(bf, ip, interpeter).value;
+    auto result =
+        visit_instruction<ExecResult, Checks>(bf, ip, interpeter).value;
     if (result.exec_next_ip == nullptr) {
       break;
       exit(-1);
@@ -557,12 +572,11 @@ template <bool Checks> static inline void myInterpret(bytefile const *bf) {
   }
 }
 
-int main(int argc, char *argv[]) {
+void compare_performance(bytefile *bf) {
   using std::chrono::duration;
   using std::chrono::duration_cast;
   using std::chrono::high_resolution_clock;
   using std::chrono::milliseconds;
-  bytefile const *bf = read_file(argv[1]);
   {
     auto before = high_resolution_clock::now();
     std::unordered_set<u8 *> bytecodes_with_incoming_cf;
@@ -571,8 +585,7 @@ int main(int argc, char *argv[]) {
     auto after = high_resolution_clock::now();
     auto check_duration = duration_cast<milliseconds>(after - before);
 
-    fprintf(stderr, "depth check took %lldms\n",
-            check_duration.count());
+    fprintf(stderr, "depth check took %lldms\n", check_duration.count());
   }
   {
     auto before = high_resolution_clock::now();
@@ -590,5 +603,18 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "interpretation without checks took %lldms\n",
             interpreter_duration.count());
   }
+}
+
+int main(int argc, char *argv[]) {
+  bytefile *bf = read_file(argv[1]);
+  {
+    std::unordered_set<u8 *> bytecodes_with_incoming_cf;
+    gather_incoming_cf(bf, bytecodes_with_incoming_cf);
+    check_depth(bf, bytecodes_with_incoming_cf);
+  }
+  {
+    myInterpret<true>(bf);
+  }
+  // compare_performance(bf);
   return 0;
 }

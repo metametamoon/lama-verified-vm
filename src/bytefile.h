@@ -30,4 +30,4 @@ static inline void error(char const *format, ...) {
   va_end(argptr);
 }
 
-bytefile const *read_file(char *fname);
+bytefile *read_file(char *fname);

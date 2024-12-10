@@ -1,6 +1,8 @@
+#include "bytefile.h"
 #include "runtime-decl.h"
 #include "visitor.h"
 #include <cstddef>
+#include <cstdio>
 #include <optional>
 #include <string>
 
@@ -265,14 +267,25 @@ public:
   };
   inline ExecResult visit_begin(u8 *decode_next_ip, u8 is_closure_begin,
                                 i32 n_args, i32 n_locals) override {
+    // fprintf(stderr, "n_args=%x\n", n_args);
+    i32 real_args = n_args & 0xFFFF;
+    // fprintf(stderr, "real_Args=%x\n", real_args);
+
+    i32 required_stack = (i32)((((u32)n_args) & 0xFFFF0000) >> 16);
+    // fprintf(stderr, "req_stack=%x\n", required_stack);
+
+    if (!operands_stack.has_at_least(real_args + n_locals + 4 +
+                                    required_stack)) {
+      error("stack overflow");
+    }
     if (is_closure_begin) {
       debug(stderr, "C");
     }
-    debug(stderr, "BEGIN\t%d ", n_args);
+    debug(stderr, "BEGIN\t%d ", real_args);
     debug(stderr, "%d\n", n_locals);
     operands_stack.push(BOX(operands_stack.n_args));
     operands_stack.push((u32)operands_stack.base_pointer);
-    operands_stack.n_args = n_args;
+    operands_stack.n_args = real_args;
     operands_stack.base_pointer = __gc_stack_top + 1;
     __gc_stack_top -= (n_locals + 1);
     memset((void *)__gc_stack_top, 0, (n_locals + 1) * sizeof(size_t));
@@ -340,6 +353,7 @@ public:
     in_closure = true;
     return ExecResult{exec_next_ip};
   };
+
   inline ExecResult visit_call(u8 *decode_next_ip, i32 loc,
                                i32 n_arg) override {
     if constexpr (BytecodeChecks) {

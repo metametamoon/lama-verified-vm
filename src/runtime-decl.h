@@ -1,5 +1,4 @@
-/* Lama SM Bytecode interpreter */
-
+#pragma once 
 #include "runtime/runtime_common.h"
 #include "visitor.h"
 #include <array>
@@ -76,6 +75,11 @@ template <typename T, bool Check> struct stack {
     }
     return *(++__gc_stack_top);
   }
+  bool has_at_least(i32 left) {
+    // fprintf(stderr, "%d, %d", __gc_stack_top - data.data(), left);
+    return  (__gc_stack_top - data.data()) >= left;
+  }
+
   T top() { return *(__gc_stack_top + 1); }
 
   void print_ptrs() {

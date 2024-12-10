@@ -73,7 +73,7 @@ bool static inline check_is_begin(bytefile const *bf, u8 *ip) {
   return h == 5 && (l == 3 || l == 2);
 }
 
-template <typename T>
+template <typename T, bool BytecodeCheck = true>
 static inline VisitResult<T> visit_instruction(bytefile const *bf, u8 *ip,
                                                Visitor<T> &visitor) {
 #define FAIL                                                                   \
@@ -83,18 +83,24 @@ static inline VisitResult<T> visit_instruction(bytefile const *bf, u8 *ip,
   }
 #define RET(x) return VisitResult<T>{ip, x};
   auto read_int = [&ip, &bf]() {
-    check_address(bf, ip);
+    if constexpr (BytecodeCheck) {
+      check_address(bf, ip);
+    }
     ip += sizeof(int);
     return *(int *)(ip - sizeof(int));
   };
 
   auto read_byte = [&ip, &bf]() {
-    check_address(bf, ip);
+    if constexpr (BytecodeCheck) {
+      check_address(bf, ip);
+    }
     return *ip++;
   };
 
   auto read_string = [&read_int, &ip, &bf]() {
-    check_address(bf, ip);
+    if constexpr (BytecodeCheck) {
+      check_address(bf, ip);
+    }
     return get_string(bf, read_int());
   };
 
@@ -109,9 +115,6 @@ static inline VisitResult<T> visit_instruction(bytefile const *bf, u8 *ip,
   }
 
   case HCode::BINOP: {
-    if (l - 1 >= (i32)BinopLabel::BINOP_LAST) {
-      FAIL;
-    }
     RET(visitor.visit_binop(ip, l - 1));
     break;
   }
