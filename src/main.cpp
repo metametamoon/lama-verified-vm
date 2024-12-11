@@ -39,6 +39,10 @@ static inline int get_public_offset(bytefile const *f, int i) {
     fprintf(stderr, "Trying to read out of bounds public member at %d", i);
     exit(-1);
   }
+  auto offset = f->public_ptr[i * 2 + 1];
+  if (offset >= f->code_end - f->code_ptr) {
+    error("public symbol at index %d points outside code area\n", i);
+  }
   return f->public_ptr[i * 2 + 1];
 }
 
@@ -428,18 +432,19 @@ static inline InstructionResult run_instruction(u8 *ip, bytefile const *bf,
 
 void gather_incoming_cf(bytefile const *bf, std::unordered_set<u8 *> &result) {
   std::vector<u8 *> instruction_stack;
-  for (i32 i = 0; i < bf->public_symbols_number; i++) {
-    u8 *public_symbol_entry_ip = bf->code_ptr + get_public_offset(bf, i);
-    instruction_stack.push_back(public_symbol_entry_ip);
-    result.insert(public_symbol_entry_ip);
-  }
-  std::unordered_set<u8 *> visited;
-  auto push_if_not_visited = [&visited, &instruction_stack](u8 *possible_ip) {
-    if (visited.count(possible_ip) == 0) {
+  std::vector<bool> visited(bf->code_end -  bf->code_ptr, false);
+  auto push_if_not_visited = [&visited, &instruction_stack, &bf](u8 *possible_ip) {
+    auto offset = possible_ip - bf->code_ptr;
+    if (!visited[offset]) {
       instruction_stack.push_back(possible_ip);
-      visited.insert(possible_ip);
+      visited[offset] = true;
     }
   };
+
+  for (i32 i = 0; i < bf->public_symbols_number; i++) {
+    u8 *public_symbol_entry_ip = bf->code_ptr + get_public_offset(bf, i);
+    push_if_not_visited(public_symbol_entry_ip);
+  }
 
   while (!instruction_stack.empty()) {
     u8 *ip = instruction_stack.back();
@@ -610,7 +615,8 @@ void run_with_verifier_checks(bytefile *bf, bool print_perf = false) {
   auto exec_duration =
       duration_cast<milliseconds>(after_execution - after_verification);
 
-  fprintf(stderr, "verification took %fs\n", check_duration.count() * 1.0 / 1000);
+  fprintf(stderr, "verification took %fs\n",
+          check_duration.count() * 1.0 / 1000);
   fprintf(stderr, "execution without checks took %fs\n",
           exec_duration.count() * 1.0 / 1000);
 }
