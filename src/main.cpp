@@ -1,5 +1,5 @@
 #include "bytefile.h"
-#include "depth-visitor.h"
+#include "diagnostic-visitor.h"
 #include "executing-visitor.h"
 #include "lama-enums.h"
 #include "visitor.h"
@@ -432,8 +432,9 @@ static inline InstructionResult run_instruction(u8 *ip, bytefile const *bf,
 
 void gather_incoming_cf(bytefile const *bf, std::unordered_set<u8 *> &result) {
   std::vector<u8 *> instruction_stack;
-  std::vector<bool> visited(bf->code_end -  bf->code_ptr, false);
-  auto push_if_not_visited = [&visited, &instruction_stack, &bf](u8 *possible_ip) {
+  std::vector<bool> visited(bf->code_end - bf->code_ptr, false);
+  auto push_if_not_visited = [&visited, &instruction_stack,
+                              &bf](u8 *possible_ip) {
     auto offset = possible_ip - bf->code_ptr;
     if (!visited[offset]) {
       instruction_stack.push_back(possible_ip);
@@ -497,10 +498,13 @@ void check_depth(bytefile *bf, std::unordered_set<u8 *> const &incoming_cf) {
     auto next = instruction_stack.back();
     auto inst = run_instruction(next.ip, bf, false);
     instruction_stack.pop_back();
-    auto const [decode_next_ip, depth_info] =
+    auto const [decode_next_ip, diagnostic_info] =
         visit_instruction<DiagnosticInformation, Check>(bf, next.ip,
                                                         depth_visitor);
-    auto new_depth = next.current_depth + depth_info.depth_change;
+    if (diagnostic_info.required_depth > next.current_depth) {
+      error("stack underflow 0x%x", next.ip - bf->code_ptr);
+    }
+    auto new_depth = next.current_depth + diagnostic_info.depth_change;
     if (new_depth < 0) {
       error("error: negative depth stack on the abstract executing at:\n%x",
             next.ip - bf->code_ptr);
@@ -508,9 +512,9 @@ void check_depth(bytefile *bf, std::unordered_set<u8 *> const &incoming_cf) {
     if (incoming_cf.count(next.ip)) {
       register_depth(next.ip, next.current_depth);
     }
-    switch (depth_info.kind) {
+    switch (diagnostic_info.kind) {
     case InstructionKind::CALL: {
-      auto jump_ip = bf->code_ptr + depth_info.jump_address.value();
+      auto jump_ip = bf->code_ptr + diagnostic_info.jump_address.value();
       if (visited.count(jump_ip) == 0) {
         visited.insert(jump_ip);
         instruction_stack.push_back(DepthTracker{jump_ip, jump_ip, 0, 0});
@@ -521,7 +525,7 @@ void check_depth(bytefile *bf, std::unordered_set<u8 *> const &incoming_cf) {
       break;
     }
     case InstructionKind::JMP: {
-      u8 *jump_ip = bf->code_ptr + depth_info.jump_address.value();
+      u8 *jump_ip = bf->code_ptr + diagnostic_info.jump_address.value();
       if (visited.count(jump_ip) == 0) {
         visited.insert(jump_ip);
         instruction_stack.push_back(
@@ -532,7 +536,7 @@ void check_depth(bytefile *bf, std::unordered_set<u8 *> const &incoming_cf) {
       break;
     }
     case InstructionKind::CJMP: {
-      u8 *jump_ip = bf->code_ptr + depth_info.jump_address.value();
+      u8 *jump_ip = bf->code_ptr + diagnostic_info.jump_address.value();
       if (visited.count(jump_ip) == 0) {
         visited.insert(jump_ip);
         instruction_stack.push_back(
