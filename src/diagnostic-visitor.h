@@ -64,7 +64,7 @@ public:
     return DiagnosticInformation{-1, 1};
   }
   DiagnosticInformation visit_dup(u8 *decode_next_ip) {
-    return DiagnosticInformation{1, 0};
+    return DiagnosticInformation{1, 1};
   }
   DiagnosticInformation visit_swap(u8 *decode_next_ip) {
     return DiagnosticInformation{0, 2};
@@ -164,7 +164,7 @@ public:
     return DiagnosticInformation{0, 1};
   }
   DiagnosticInformation visit_call_lstring(u8 *decode_next_ip) {
-    return DiagnosticInformation{0, 0};
+    return DiagnosticInformation{0, 1};
   }
   DiagnosticInformation visit_call_barray(u8 *decode_next_ip, i32 arg) {
     return DiagnosticInformation{(i8)(1 - arg), (i8)arg};
